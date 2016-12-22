@@ -34,8 +34,10 @@ klib2.a: $(KLIB_OBJS)
 	$(AR) -csr $@ $^
 
 clean:
-	rm -f *.o *.a
-	rm -f **/*.o **/*.a
+	rm -f *.o **/*.o
+
+purge: clean
+	rm -f *.a **/*.a
 
 cleanhist:
 	rm -rf .git .gitignore
