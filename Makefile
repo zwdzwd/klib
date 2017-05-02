@@ -33,6 +33,7 @@ klib.a: $(KLIB_OBJS) $(BGZF_OBJ)
 	@-rm -f $@
 	$(AR) -csr $@ $^
 
+# without BGZF objects
 klib2.a: $(KLIB_OBJS)
 	@-rm -f $@
 	$(AR) -csr $@ $^
