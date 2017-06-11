@@ -142,102 +142,99 @@ FLOAT hmm_Viterbi(const hmm_par_t *hp, hmm_data_t *hd)
 
 // forward algorithm
 
-void hmm_forward(const hmm_par_t *hp, hmm_data_t *hd)
-{
-	FLOAT sum, tmp, **at;
-	int u, k, l;
-	int n, m, L;
-	assert(hp && hd);
-	// allocate memory for hd->f and hd->s
-	n = hp->n; m = hp->m; L = hd->L;
-	if (hd->s) free(hd->s);
-	if (hd->f) { 
-		for (k = 0; k <= hd->L; ++k) free(hd->f[k]);
-		free(hd->f);
-	}
-	hd->f = (FLOAT**)calloc2(hd->L+1, hp->n, sizeof(FLOAT));
-	hd->s = (FLOAT*)calloc(hd->L+1, sizeof(FLOAT));
-	hd->status &= ~(unsigned)HMM_FORWARD;
-	// at[][] array helps to improve the cache efficiency
-	at = (FLOAT**)calloc2(n, n, sizeof(FLOAT));
-	// transpose a[][]
-	for (k = 0; k != n; ++k)
-		for (l = 0; l != n; ++l)
-			at[k][l] = hp->a[l][k];
-	// f[0], but it should never be used
-	hd->s[0] = 1.0;
-	for (k = 0; k != n; ++k) hd->f[0][k] = 0.0;
-	// f[1]
-	for (k = 0, sum = 0.0; k != n; ++k)
-		sum += (hd->f[1][k] = hp->a0[k] * hp->e[(int)hd->seq[1]][k]);
-	for (k = 0; k != n; ++k) hd->f[1][k] /= sum;
-	hd->s[1] = sum;
-	// f[2..hmmL], the core loop
-	for (u = 2; u <= L; ++u) {
-		FLOAT *fu = hd->f[u], *fu1 = hd->f[u-1], *eu = hp->e[(int)hd->seq[u]];
-		for (k = 0, sum = 0.0; k != n; ++k) {
-			FLOAT *aa = at[k];
-			for (l = 0, tmp = 0.0; l != n; ++l) tmp += fu1[l] * aa[l];
-			sum += (fu[k] = eu[k] * tmp);
-		}
-		for (k = 0; k != n; ++k) fu[k] /= sum;
-		hd->s[u] = sum;
-	}
-	// free at array
-	for (k = 0; k != hp->n; ++k) free(at[k]);
-	free(at);
-	hd->status |= HMM_FORWARD;
+void hmm_forward(const hmm_par_t *hp, hmm_data_t *hd) {
+  FLOAT sum, tmp, **at;
+  int u, k, l;
+  int n, L;
+  assert(hp && hd);
+  // allocate memory for hd->f and hd->s
+  n = hp->n; L = hd->L;
+  if (hd->s) free(hd->s);
+  if (hd->f) { 
+    for (k = 0; k <= hd->L; ++k) free(hd->f[k]);
+    free(hd->f);
+  }
+  hd->f = (FLOAT**)calloc2(hd->L+1, hp->n, sizeof(FLOAT));
+  hd->s = (FLOAT*)calloc(hd->L+1, sizeof(FLOAT));
+  hd->status &= ~(unsigned)HMM_FORWARD;
+  // at[][] array helps to improve the cache efficiency
+  at = (FLOAT**)calloc2(n, n, sizeof(FLOAT));
+  // transpose a[][]
+  for (k = 0; k != n; ++k)
+    for (l = 0; l != n; ++l)
+      at[k][l] = hp->a[l][k];
+  // f[0], but it should never be used
+  hd->s[0] = 1.0;
+  for (k = 0; k != n; ++k) hd->f[0][k] = 0.0;
+  // f[1]
+  for (k = 0, sum = 0.0; k != n; ++k)
+    sum += (hd->f[1][k] = hp->a0[k] * hp->e[(int)hd->seq[1]][k]);
+  for (k = 0; k != n; ++k) hd->f[1][k] /= sum;
+  hd->s[1] = sum;
+  // f[2..hmmL], the core loop
+  for (u = 2; u <= L; ++u) {
+    FLOAT *fu = hd->f[u], *fu1 = hd->f[u-1], *eu = hp->e[(int)hd->seq[u]];
+    for (k = 0, sum = 0.0; k != n; ++k) {
+      FLOAT *aa = at[k];
+      for (l = 0, tmp = 0.0; l != n; ++l) tmp += fu1[l] * aa[l];
+      sum += (fu[k] = eu[k] * tmp);
+    }
+    for (k = 0; k != n; ++k) fu[k] /= sum;
+    hd->s[u] = sum;
+  }
+  // free at array
+  for (k = 0; k != hp->n; ++k) free(at[k]);
+  free(at);
+  hd->status |= HMM_FORWARD;
 }
 
 //  precalculate hp->ae
 
-void hmm_pre_backward(hmm_par_t *hp)
-{
-	int m, n, b, k, l;
-	assert(hp);
-	m = hp->m; n = hp->n;
-	for (b = 0; b <= m; ++b) {
-		for (k = 0; k != n; ++k) {
-			FLOAT *p = hp->ae[b * hp->n + k];
-			for (l = 0; l != n; ++l)
-				p[l] = hp->e[b][l] * hp->a[k][l];
-		}
-	}
+void hmm_pre_backward(hmm_par_t *hp) {
+  int m, n, b, k, l;
+  assert(hp);
+  m = hp->m; n = hp->n;
+  for (b = 0; b <= m; ++b) {
+    for (k = 0; k != n; ++k) {
+      FLOAT *p = hp->ae[b * hp->n + k];
+      for (l = 0; l != n; ++l)
+        p[l] = hp->e[b][l] * hp->a[k][l];
+    }
+  }
 }
 
 // backward algorithm
 
-void hmm_backward(const hmm_par_t *hp, hmm_data_t *hd)
-{
-	FLOAT tmp;
-	int k, l, u;
-	int m, n, L;
-	assert(hp && hd);
-	assert(hd->status & HMM_FORWARD);
-	// allocate memory for hd->b
-	m = hp->m; n = hp->n; L = hd->L;
-	if (hd->b) { 
-		for (k = 0; k <= hd->L; ++k) free(hd->b[k]);
-		free(hd->b);
-	}
-	hd->status &= ~(unsigned)HMM_BACKWARD;
-	hd->b = (FLOAT**)calloc2(L+1, hp->n, sizeof(FLOAT));
-	// b[L]
-	for (k = 0; k != hp->n; ++k) hd->b[L][k] = 1.0 / hd->s[L];
-	// b[1..L-1], the core loop
-	for (u = L-1; u >= 1; --u) {
-		FLOAT *bu1 = hd->b[u+1], **p = hp->ae + (int)hd->seq[u+1] * n;
-		for (k = 0; k != n; ++k) {
-			FLOAT *q = p[k];
-			for (l = 0, tmp = 0.0; l != n; ++l) tmp += q[l] * bu1[l];
-			hd->b[u][k] = tmp / hd->s[u];
-		}
-	}
-	hd->status |= HMM_BACKWARD;
-	for (l = 0, tmp = 0.0; l != n; ++l)
-		tmp += hp->a0[l] * hd->b[1][l] * hp->e[(int)hd->seq[1]][l];
-	if (tmp > 1.0 + 1e-6 || tmp < 1.0 - 1e-6) // in theory, tmp should always equal to 1
-		fprintf(stderr, "++ Underflow may have happened (%lg).\n", tmp);
+void hmm_backward(const hmm_par_t *hp, hmm_data_t *hd) {
+  FLOAT tmp;
+  int k, l, u;
+  int n, L;
+  assert(hp && hd);
+  assert(hd->status & HMM_FORWARD);
+  // allocate memory for hd->b
+  n = hp->n; L = hd->L;
+  if (hd->b) { 
+    for (k = 0; k <= hd->L; ++k) free(hd->b[k]);
+    free(hd->b);
+  }
+  hd->status &= ~(unsigned)HMM_BACKWARD;
+  hd->b = (FLOAT**)calloc2(L+1, hp->n, sizeof(FLOAT));
+  // b[L]
+  for (k = 0; k != hp->n; ++k) hd->b[L][k] = 1.0 / hd->s[L];
+  // b[1..L-1], the core loop
+  for (u = L-1; u >= 1; --u) {
+    FLOAT *bu1 = hd->b[u+1], **p = hp->ae + (int)hd->seq[u+1] * n;
+    for (k = 0; k != n; ++k) {
+      FLOAT *q = p[k];
+      for (l = 0, tmp = 0.0; l != n; ++l) tmp += q[l] * bu1[l];
+      hd->b[u][k] = tmp / hd->s[u];
+    }
+  }
+  hd->status |= HMM_BACKWARD;
+  for (l = 0, tmp = 0.0; l != n; ++l)
+    tmp += hp->a0[l] * hd->b[1][l] * hp->e[(int)hd->seq[1]][l];
+  if (tmp > 1.0 + 1e-6 || tmp < 1.0 - 1e-6) // in theory, tmp should always equal to 1
+    fprintf(stderr, "++ Underflow may have happened (%lg).\n", tmp);
 }
 
 // log-likelihood of the observation

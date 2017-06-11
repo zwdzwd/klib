@@ -430,14 +430,13 @@ ssize_t bgzf_write(BGZF *fp, const void *data, ssize_t length)
 	return bytes_written;
 }
 
-int bgzf_close(BGZF* fp)
-{
-	int ret, count, block_length;
+int bgzf_close(BGZF* fp) {
+	int ret, block_length;
 	if (fp == 0) return -1;
 	if (fp->open_mode == 'w') {
 		if (bgzf_flush(fp) != 0) return -1;
 		block_length = deflate_block(fp, 0); // write an empty block
-		count = fwrite(fp->compressed_block, 1, block_length, fp->fp);
+		if (fwrite(fp->compressed_block, 1, block_length, fp->fp) < 0) return -1;
 		if (fflush(fp->fp) != 0) {
 			fp->errcode |= BGZF_ERR_IO;
 			return -1;

@@ -11,6 +11,7 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #endif
 
 #ifdef _WIN32
@@ -18,38 +19,36 @@
 #endif
 
 #ifndef _KO_NO_NET
-static int socket_wait(int fd, int is_read)
-{
-	fd_set fds, *fdr = 0, *fdw = 0;
-	struct timeval tv;
-	int ret;
-	tv.tv_sec = 5; tv.tv_usec = 0; // 5 seconds time out
-	FD_ZERO(&fds);
-	FD_SET(fd, &fds);
-	if (is_read) fdr = &fds;
-	else fdw = &fds;
-	ret = select(fd+1, fdr, fdw, 0, &tv);
-	if (ret == -1) perror("select");
-	return ret;
+static int socket_wait(int fd, int is_read) {
+  fd_set fds, *fdr = 0, *fdw = 0;
+  struct timeval tv;
+  int ret;
+  tv.tv_sec = 5; tv.tv_usec = 0; // 5 seconds time out
+  FD_ZERO(&fds);
+  FD_SET(fd, &fds);
+  if (is_read) fdr = &fds;
+  else fdw = &fds;
+  ret = select(fd+1, fdr, fdw, 0, &tv);
+  if (ret == -1) perror("select");
+  return ret;
 }
 
-static int socket_connect(const char *host, const char *port)
-{
+static int socket_connect(const char *host, const char *port) {
 #define __err_connect(func) do { perror(func); freeaddrinfo(res); return -1; } while (0)
 
-	int ai_err, on = 1, fd;
-	struct linger lng = { 0, 0 };
-	struct addrinfo hints, *res = 0;
-	memset(&hints, 0, sizeof(struct addrinfo));
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	if ((ai_err = getaddrinfo(host, port, &hints, &res)) != 0) { fprintf(stderr, "can't resolve %s:%s: %s\n", host, port, gai_strerror(ai_err)); return -1; }
-	if ((fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1) __err_connect("socket");
-	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1) __err_connect("setsockopt");
-	if (setsockopt(fd, SOL_SOCKET, SO_LINGER, &lng, sizeof(lng)) == -1) __err_connect("setsockopt");
-	if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) __err_connect("connect");
-	freeaddrinfo(res);
-	return fd;
+  int ai_err, on = 1, fd;
+  struct linger lng = { 0, 0 };
+  struct addrinfo hints, *res = 0;
+  memset(&hints, 0, sizeof(struct addrinfo));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  if ((ai_err = getaddrinfo(host, port, &hints, &res)) != 0) { fprintf(stderr, "can't resolve %s:%s: %s\n", host, port, gai_strerror(ai_err)); return -1; }
+  if ((fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1) __err_connect("socket");
+  if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1) __err_connect("setsockopt");
+  if (setsockopt(fd, SOL_SOCKET, SO_LINGER, &lng, sizeof(lng)) == -1) __err_connect("setsockopt");
+  if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) __err_connect("connect");
+  freeaddrinfo(res);
+  return fd;
 #undef __err_connect
 }
 
@@ -89,7 +88,7 @@ static int http_open(const char *fn)
 	buf = calloc(0x10000, 1); // FIXME: I am lazy... But in principle, 64KB should be large enough.
 	l += sprintf(buf + l, "GET %s HTTP/1.0\r\nHost: %s\r\n", path, http_host);
 	l += sprintf(buf + l, "\r\n");
-	write(fd, buf, l);
+	if (write(fd, buf, l) < 0) return -1;
 	l = 0;
 	while (read(fd, buf + l, 1)) { // read HTTP header; FIXME: bad efficiency
 		if (buf[l] == '\n' && l >= 3)
@@ -142,7 +141,7 @@ static int kftp_get_response(ftpaux_t *aux)
 static int kftp_send_cmd(ftpaux_t *aux, const char *cmd, int is_get)
 {
 	if (socket_wait(aux->ctrl_fd, 0) <= 0) return -1; // socket is not ready for writing
-	write(aux->ctrl_fd, cmd, strlen(cmd));
+	if (write(aux->ctrl_fd, cmd, strlen(cmd)) < 0) return 0;
 	return is_get? kftp_get_response(aux) : 0;
 }
 
@@ -202,7 +201,7 @@ ftp_open_end:
 static char **cmd2argv(const char *cmd)
 {
 	int i, beg, end, argc;
-	char **argv, *p, *q, *str;
+	char **argv, *str;
 	end = strlen(cmd);
 	for (i = end - 1; i >= 0; --i)
 		if (!isspace(cmd[i])) break;
@@ -216,7 +215,7 @@ static char **cmd2argv(const char *cmd)
 	argv = (char**)calloc(argc + 2, sizeof(void*));
 	argv[0] = str = (char*)calloc(end - beg + 1, 1);
 	strncpy(argv[0], cmd + beg, end - beg);
-	for (i = argc = 1, q = p = str; i < end - beg; ++i)
+	for (i = argc = 1; i < end - beg; ++i)
 		if (isspace(str[i])) str[i] = 0;
 		else if (str[i] && str[i-1] == 0) argv[argc++] = &str[i];
 	return argv;
@@ -233,73 +232,72 @@ typedef struct {
 	pid_t pid;
 } koaux_t;
 
-void *kopen(const char *fn, int *_fd)
-{
-	koaux_t *aux = 0;
-	*_fd = -1;
-	if (strstr(fn, "http://") == fn) {
-		aux = calloc(1, sizeof(koaux_t));
-		aux->type = KO_HTTP;
-		aux->fd = http_open(fn);
-	} else if (strstr(fn, "ftp://") == fn) {
-		aux = calloc(1, sizeof(koaux_t));
-		aux->type = KO_FTP;
-		aux->fd = ftp_open(fn);
-	} else if (strcmp(fn, "-") == 0) {
-		aux = calloc(1, sizeof(koaux_t));
-		aux->type = KO_STDIN;
-		aux->fd = STDIN_FILENO;
-	} else {
-		const char *p, *q;
-		for (p = fn; *p; ++p)
-			if (!isspace(*p)) break;
-		if (*p == '<') { // pipe open
-			int need_shell, pfd[2];
-			pid_t pid;
-			// a simple check to see if we need to invoke a shell; not always working
-			for (q = p + 1; *q; ++q)
-				if (ispunct(*q) && *q != '.' && *q != '_' && *q != '-' && *q != ':')
-					break;
-			need_shell = (*q != 0);
-			pipe(pfd);
-			pid = vfork();
-			if (pid == -1) { /* vfork() error */
-				close(pfd[0]); close(pfd[1]);
-				return 0;
-			}
-			if (pid == 0) { /* the child process */
-				char **argv; /* FIXME: I do not know if this will lead to a memory leak */
-				close(pfd[0]);
-				dup2(pfd[1], STDOUT_FILENO);
-				close(pfd[1]);
-				if (!need_shell) {
-					argv = cmd2argv(p + 1);
-					execvp(argv[0], argv);
-					free(argv[0]); free(argv);
-				} else execl("/bin/sh", "sh", "-c", p + 1, NULL);
-				exit(1);
-			} else { /* parent process */
-				close(pfd[1]);
-				aux = calloc(1, sizeof(koaux_t));
-				aux->type = KO_PIPE;
-				aux->fd = pfd[0];
-				aux->pid = pid;
-			}
-		} else {
+void *kopen(const char *fn, int *_fd) {
+  koaux_t *aux = 0;
+  *_fd = -1;
+  if (strstr(fn, "http://") == fn) {
+    aux = calloc(1, sizeof(koaux_t));
+    aux->type = KO_HTTP;
+    aux->fd = http_open(fn);
+  } else if (strstr(fn, "ftp://") == fn) {
+    aux = calloc(1, sizeof(koaux_t));
+    aux->type = KO_FTP;
+    aux->fd = ftp_open(fn);
+  } else if (strcmp(fn, "-") == 0) {
+    aux = calloc(1, sizeof(koaux_t));
+    aux->type = KO_STDIN;
+    aux->fd = STDIN_FILENO;
+  } else {
+    const char *p, *q;
+    for (p = fn; *p; ++p)
+      if (!isspace(*p)) break;
+    if (*p == '<') { // pipe open
+      int need_shell, pfd[2];
+      pid_t pid;
+      // a simple check to see if we need to invoke a shell; not always working
+      for (q = p + 1; *q; ++q)
+        if (ispunct(*q) && *q != '.' && *q != '_' && *q != '-' && *q != ':')
+          break;
+      need_shell = (*q != 0);
+      if (pipe(pfd) < 0) return 0;
+      pid = vfork();
+      if (pid == -1) { /* vfork() error */
+        close(pfd[0]); close(pfd[1]);
+        return 0;
+      }
+      if (pid == 0) { /* the child process */
+        char **argv; /* FIXME: I do not know if this will lead to a memory leak */
+        close(pfd[0]);
+        dup2(pfd[1], STDOUT_FILENO);
+        close(pfd[1]);
+        if (!need_shell) {
+          argv = cmd2argv(p + 1);
+          execvp(argv[0], argv);
+          free(argv[0]); free(argv);
+        } else execl("/bin/sh", "sh", "-c", p + 1, NULL);
+        exit(1);
+      } else { /* parent process */
+        close(pfd[1]);
+        aux = calloc(1, sizeof(koaux_t));
+        aux->type = KO_PIPE;
+        aux->fd = pfd[0];
+        aux->pid = pid;
+      }
+    } else {
 #ifdef _WIN32
-			*_fd = open(fn, O_RDONLY | O_BINARY);
+      *_fd = open(fn, O_RDONLY | O_BINARY);
 #else
-			*_fd = open(fn, O_RDONLY);
+      *_fd = open(fn, O_RDONLY);
 #endif
-			if (*_fd) {
-				aux = calloc(1, sizeof(koaux_t));
-				aux->type = KO_FILE;
-				aux->fd = *_fd;
-			}
-		}
-	}
-	*_fd = aux->fd;
-	return aux;
+      if (*_fd) {
+        aux = calloc(1, sizeof(koaux_t));
+        aux->type = KO_FILE;
+        aux->fd = *_fd;
+      }
+    }
+  }
+  *_fd = aux->fd;
+  return aux;
 }
 
 int kclose(void *a)

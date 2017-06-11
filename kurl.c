@@ -50,19 +50,20 @@ void kurl_destroy(void)
 	curl_global_cleanup();
 }
 
-static int prepare(kurl_t *ku, int do_seek)
-{
-	if (kurl_isfile(ku)) {
-		if (do_seek && lseek(ku->fd, ku->off0, SEEK_SET) != ku->off0)
-			return -1;
-	} else { // FIXME: for S3, we need to re-authorize
-		int rc;
-		rc = curl_multi_remove_handle(ku->multi, ku->curl);
-		rc = curl_easy_setopt(ku->curl, CURLOPT_RESUME_FROM, ku->off0);
-		rc = curl_multi_add_handle(ku->multi, ku->curl);
-	}
-	ku->p_buf = ku->l_buf = 0; // empty the buffer
-	return 0;
+static int prepare(kurl_t *ku, int do_seek) {
+  if (kurl_isfile(ku)) {
+    if (do_seek && lseek(ku->fd, ku->off0, SEEK_SET) != ku->off0)
+      return -1;
+  }
+  // FIXME: for S3, we need to re-authorize */
+  /* else { */
+  /* 	int rc; */
+  /* 	rc = curl_multi_remove_handle(ku->multi, ku->curl); */
+  /* 	rc = curl_easy_setopt(ku->curl, CURLOPT_RESUME_FROM, ku->off0); */
+  /* 	rc = curl_multi_add_handle(ku->multi, ku->curl); */
+  /* } */
+  ku->p_buf = ku->l_buf = 0; // empty the buffer
+  return 0;
 }
 
 static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *data) // callback required by cURL
@@ -434,34 +435,33 @@ static void s3_sign(const char *key, const char *data, char out[29])
 	out[j++] = '='; out[j] = 0; // SHA1 digest always has 160 bits, or 20 bytes. We need one '=' at the end.
 }
 
-static char *s3_read_awssecret(const char *fn)
-{
-	char *p, *secret, buf[128], *path;
-	FILE *fp;
-	int l;
-	if (fn == 0) {
-		char *home;
-		home = getenv("HOME");
-		if (home == 0) return 0;
-		l = strlen(home) + 12;
-		path = (char*)malloc(strlen(home) + 12);
-		strcat(strcpy(path, home), "/.awssecret");
-	} else path = (char*)fn;
-	fp = fopen(path, "r");
-	if (path != fn) free(path);
-	if (fp == 0) return 0;
-	l = fread(buf, 1, 127, fp);
-	fclose(fp);
-	buf[l] = 0;
-	for (p = buf; *p != 0 && *p != '\n'; ++p);
-	if (*p == 0) return 0;
-	*p = 0; secret = p + 1;
-	for (++p; *p != 0 && *p != '\n'; ++p);
-	*p = 0;
-	l = p - buf + 1;
-	p = (char*)malloc(l);
-	memcpy(p, buf, l);
-	return p;
+static char *s3_read_awssecret(const char *fn) {
+  char *p, buf[128], *path; // char *secret
+  FILE *fp;
+  int l;
+  if (fn == 0) {
+    char *home;
+    home = getenv("HOME");
+    if (home == 0) return 0;
+    l = strlen(home) + 12;
+    path = (char*)malloc(strlen(home) + 12);
+    strcat(strcpy(path, home), "/.awssecret");
+  } else path = (char*)fn;
+  fp = fopen(path, "r");
+  if (path != fn) free(path);
+  if (fp == 0) return 0;
+  l = fread(buf, 1, 127, fp);
+  fclose(fp);
+  buf[l] = 0;
+  for (p = buf; *p != 0 && *p != '\n'; ++p);
+  if (*p == 0) return 0;
+  *p = 0; //secret = p + 1;
+  for (++p; *p != 0 && *p != '\n'; ++p);
+  *p = 0;
+  l = p - buf + 1;
+  p = (char*)malloc(l);
+  memcpy(p, buf, l);
+  return p;
 }
 
 typedef struct { int l, m; char *s; } kstring_t;
