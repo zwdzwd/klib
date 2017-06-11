@@ -230,11 +230,10 @@ static int kftp_get_response(knetFile *ftp)
 	return strtol(ftp->response, &p, 0);
 }
 
-static int kftp_send_cmd(knetFile *ftp, const char *cmd, int is_get)
-{
-	if (socket_wait(ftp->ctrl_fd, 0) <= 0) return -1; // socket is not ready for writing
-	netwrite(ftp->ctrl_fd, cmd, strlen(cmd));
-	return is_get? kftp_get_response(ftp) : 0;
+static int kftp_send_cmd(knetFile *ftp, const char *cmd, int is_get) {
+  if (socket_wait(ftp->ctrl_fd, 0) <= 0) return -1; // socket is not ready for writing
+  if (netwrite(ftp->ctrl_fd, cmd, strlen(cmd)) < 0) return 0; // check output
+  return is_get? kftp_get_response(ftp) : 0;
 }
 
 static int kftp_pasv_prep(knetFile *ftp)
@@ -402,46 +401,45 @@ knetFile *khttp_parse_url(const char *fn, const char *mode)
 	return fp;
 }
 
-int khttp_connect_file(knetFile *fp)
-{
-	int ret, l = 0;
-	char *buf, *p;
-	if (fp->fd != -1) netclose(fp->fd);
-	fp->fd = socket_connect(fp->host, fp->port);
-	buf = (char*)calloc(0x10000, 1); // FIXME: I am lazy... But in principle, 64KB should be large enough.
-	l += sprintf(buf + l, "GET %s HTTP/1.0\r\nHost: %s\r\n", fp->path, fp->http_host);
-    l += sprintf(buf + l, "Range: bytes=%lld-\r\n", (long long)fp->offset);
-	l += sprintf(buf + l, "\r\n");
-	netwrite(fp->fd, buf, l);
-	l = 0;
-	while (netread(fp->fd, buf + l, 1)) { // read HTTP header; FIXME: bad efficiency
-		if (buf[l] == '\n' && l >= 3)
-			if (strncmp(buf + l - 3, "\r\n\r\n", 4) == 0) break;
-		++l;
-	}
-	buf[l] = 0;
-	if (l < 14) { // prematured header
-		netclose(fp->fd);
-		fp->fd = -1;
-		return -1;
-	}
-	ret = strtol(buf + 8, &p, 0); // HTTP return code
-	if (ret == 200 && fp->offset>0) { // 200 (complete result); then skip beginning of the file
-		off_t rest = fp->offset;
-		while (rest) {
-			off_t l = rest < 0x10000? rest : 0x10000;
-			rest -= my_netread(fp->fd, buf, l);
-		}
-	} else if (ret != 206 && ret != 200) {
-		free(buf);
-		fprintf(stderr, "[khttp_connect_file] fail to open file (HTTP code: %d).\n", ret);
-		netclose(fp->fd);
-		fp->fd = -1;
-		return -1;
-	}
-	free(buf);
-	fp->is_ready = 1;
-	return 0;
+int khttp_connect_file(knetFile *fp) {
+  int ret, l = 0;
+  char *buf, *p;
+  if (fp->fd != -1) netclose(fp->fd);
+  fp->fd = socket_connect(fp->host, fp->port);
+  buf = (char*)calloc(0x10000, 1); // FIXME: I am lazy... But in principle, 64KB should be large enough.
+  l += sprintf(buf + l, "GET %s HTTP/1.0\r\nHost: %s\r\n", fp->path, fp->http_host);
+  l += sprintf(buf + l, "Range: bytes=%lld-\r\n", (long long)fp->offset);
+  l += sprintf(buf + l, "\r\n");
+  if (netwrite(fp->fd, buf, l) < 0) return -1;
+  l = 0;
+  while (netread(fp->fd, buf + l, 1)) { // read HTTP header; FIXME: bad efficiency
+    if (buf[l] == '\n' && l >= 3)
+      if (strncmp(buf + l - 3, "\r\n\r\n", 4) == 0) break;
+    ++l;
+  }
+  buf[l] = 0;
+  if (l < 14) { // prematured header
+    netclose(fp->fd);
+    fp->fd = -1;
+    return -1;
+  }
+  ret = strtol(buf + 8, &p, 0); // HTTP return code
+  if (ret == 200 && fp->offset>0) { // 200 (complete result); then skip beginning of the file
+    off_t rest = fp->offset;
+    while (rest) {
+      off_t l = rest < 0x10000? rest : 0x10000;
+      rest -= my_netread(fp->fd, buf, l);
+    }
+  } else if (ret != 206 && ret != 200) {
+    free(buf);
+    fprintf(stderr, "[khttp_connect_file] fail to open file (HTTP code: %d).\n", ret);
+    netclose(fp->fd);
+    fp->fd = -1;
+    return -1;
+  }
+  free(buf);
+  fp->is_ready = 1;
+  return 0;
 }
 
 /********************
@@ -528,45 +526,44 @@ off_t knet_read(knetFile *fp, void *buf, off_t len)
 	return l;
 }
 
-off_t knet_seek(knetFile *fp, int64_t off, int whence)
-{
-	if (whence == SEEK_SET && off == fp->offset) return 0;
-	if (fp->type == KNF_TYPE_LOCAL) {
-		/* Be aware that lseek() returns the offset after seeking,
-		 * while fseek() returns zero on success. */
-		off_t offset = lseek(fp->fd, off, whence);
-		if (offset == -1) {
-            // Be silent, it is OK for knet_seek to fail when the file is streamed
-            // fprintf(stderr,"[knet_seek] %s\n", strerror(errno));
-			return -1;
-		}
-		fp->offset = offset;
-		return off;
-	} else if (fp->type == KNF_TYPE_FTP) {
-        if (whence==SEEK_CUR)
-            fp->offset += off;
-        else if (whence==SEEK_SET)
-            fp->offset = off;
-        else if ( whence==SEEK_END)
-            fp->offset = fp->file_size+off;
-		fp->is_ready = 0;
-		return off;
-	} else if (fp->type == KNF_TYPE_HTTP) {
-		if (whence == SEEK_END) { // FIXME: can we allow SEEK_END in future?
-			fprintf(stderr, "[knet_seek] SEEK_END is not supported for HTTP. Offset is unchanged.\n");
-			errno = ESPIPE;
-			return -1;
-		}
-        if (whence==SEEK_CUR)
-            fp->offset += off;
-        else if (whence==SEEK_SET)
-            fp->offset = off;
-		fp->is_ready = 0;
-		return off;
-	}
-	errno = EINVAL;
-    fprintf(stderr,"[knet_seek] %s\n", strerror(errno));
-	return -1;
+off_t knet_seek(knetFile *fp, int64_t off, int whence) {
+  if (whence == SEEK_SET && off == fp->offset) return 0;
+  if (fp->type == KNF_TYPE_LOCAL) {
+    /* Be aware that lseek() returns the offset after seeking,
+     * while fseek() returns zero on success. */
+    off_t offset = lseek(fp->fd, off, whence);
+    if (offset == -1) {
+      // Be silent, it is OK for knet_seek to fail when the file is streamed
+      // fprintf(stderr,"[knet_seek] %s\n", strerror(errno));
+      return -1;
+    }
+    fp->offset = offset;
+    return off;
+  } else if (fp->type == KNF_TYPE_FTP) {
+    if (whence==SEEK_CUR)
+      fp->offset += off;
+    else if (whence==SEEK_SET)
+      fp->offset = off;
+    else if ( whence==SEEK_END)
+      fp->offset = fp->file_size+off;
+    fp->is_ready = 0;
+    return off;
+  } else if (fp->type == KNF_TYPE_HTTP) {
+    if (whence == SEEK_END) { // FIXME: can we allow SEEK_END in future?
+      fprintf(stderr, "[knet_seek] SEEK_END is not supported for HTTP. Offset is unchanged.\n");
+      errno = ESPIPE;
+      return -1;
+    }
+    if (whence==SEEK_CUR)
+      fp->offset += off;
+    else if (whence==SEEK_SET)
+      fp->offset = off;
+    fp->is_ready = 0;
+    return off;
+  }
+  errno = EINVAL;
+  fprintf(stderr,"[knet_seek] %s\n", strerror(errno));
+  return -1;
 }
 
 int knet_close(knetFile *fp)
