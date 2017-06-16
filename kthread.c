@@ -223,8 +223,8 @@ static void *ktp_worker(void *data)
 	pthread_exit(0);
 }
 
-void kt_pipeline(int n_threads, void *(*func)(void*, int, void*), void *shared_data, int n_steps)
-{
+void kt_pipeline(int n_threads, void *(*func)(void*, int, void*), void *shared_data, int n_steps) {
+  
 	ktp_t aux;
 	pthread_t *tid;
 	int i;
